@@ -3,8 +3,11 @@
         "Name": "DIST1",
         "ParentName": "",
         "Includes": {
-            "HR-IN": true
+            "HR-IN": true,
+            "IN": true
         },
-        "Excludes": {}
+        "Excludes": {
+            "ZHEAB-TG-IN": true
+        }
     }
 }
