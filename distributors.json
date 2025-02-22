@@ -9,5 +9,11 @@
         "Excludes": {
             "ZHEAB-TG-IN": true
         }
+    },
+    "DIST2": {
+        "Name": "DIST2",
+        "ParentName": "DIST1",
+        "Includes": {},
+        "Excludes": {}
     }
 }

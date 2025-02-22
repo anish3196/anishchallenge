@@ -121,7 +121,7 @@ func (ds *DistributionSystem) LoadState(filename string) error {
 	}
 
 	if stat.Size() == 0 {
-		return nil // Empty file, no data to load
+		return nil
 	}
 
 	var distributorsData map[string]DistributorData
@@ -335,7 +335,7 @@ func main() {
 
 	flag.Parse()
 
-	// Initialize system
+	// Initialize data and distributors from csv and json file
 	system := NewDistributionSystem()
 	err := system.LoadLocationData(*csvFile)
 	if err != nil {
@@ -411,7 +411,7 @@ func main() {
 		return
 	}
 
-	// Save state after successful command execution
+	// Save state after successful command execution in json file
 	if *command != "check" && *command != "list" {
 		if err := system.SaveState(*dataFile); err != nil {
 			fmt.Printf("Error saving state: %v\n", err)
