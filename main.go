@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -17,6 +18,14 @@ type Location struct {
 	CityName     string
 	ProvinceName string
 	CountryName  string
+}
+
+// DistributorData represents the data to be persisted
+type DistributorData struct {
+	Name       string
+	ParentName string
+	Includes   map[string]bool
+	Excludes   map[string]bool
 }
 
 // Distributor represents a distribution entity with its permissions
@@ -98,6 +107,79 @@ func (ds *DistributionSystem) LoadLocationData(filename string) error {
 	return nil
 }
 
+// LoadState loads distributor data from the JSON file
+func (ds *DistributionSystem) LoadState(filename string) error {
+	file, err := os.OpenFile(filename, os.O_RDONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+
+	if stat.Size() == 0 {
+		return nil // Empty file, no data to load
+	}
+
+	var distributorsData map[string]DistributorData
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&distributorsData); err != nil {
+		return err
+	}
+
+	// First pass: create all distributors
+	for name, data := range distributorsData {
+		dist := NewDistributor(name, nil)
+		dist.Includes = data.Includes
+		dist.Excludes = data.Excludes
+		dist.Locations = ds.locations
+		ds.distributors[name] = dist
+	}
+
+	// Second pass: set up parent relationships
+	for name, data := range distributorsData {
+		if data.ParentName != "" {
+			if parent, exists := ds.distributors[data.ParentName]; exists {
+				ds.distributors[name].Parent = parent
+			}
+		}
+	}
+
+	return nil
+}
+
+// SaveState saves distributor data to the JSON file
+func (ds *DistributionSystem) SaveState(filename string) error {
+	distributorsData := make(map[string]DistributorData)
+
+	for name, dist := range ds.distributors {
+		var parentName string
+		if dist.Parent != nil {
+			parentName = dist.Parent.Name
+		}
+
+		distributorsData[name] = DistributorData{
+			Name:       dist.Name,
+			ParentName: parentName,
+			Includes:   dist.Includes,
+			Excludes:   dist.Excludes,
+		}
+	}
+
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "    ")
+	return encoder.Encode(distributorsData)
+}
+
 func (d *Distributor) AddPermission(permission string, isInclude bool) error {
 	if d.Parent != nil {
 		// Verify permission is valid with respect to parent
@@ -165,12 +247,6 @@ func isSubregion(region1, region2 []string) bool {
 	return false
 }
 
-// ValidateRegion checks if a region code exists in the loaded data
-func (d *Distributor) ValidateRegion(region string) bool {
-	_, exists := d.Locations[region]
-	return exists
-}
-
 // AddDistributor adds a new distributor to the system
 func (ds *DistributionSystem) AddDistributor(name string, parentName string) error {
 	if _, exists := ds.distributors[name]; exists {
@@ -226,10 +302,32 @@ func (ds *DistributionSystem) ValidateRegion(region string) bool {
 	return exists
 }
 
+// ListDistributors prints all distributors and their permissions
+func (ds *DistributionSystem) ListDistributors() {
+	fmt.Println("Registered Distributors:")
+	for name, dist := range ds.distributors {
+		parentName := "none"
+		if dist.Parent != nil {
+			parentName = dist.Parent.Name
+		}
+		fmt.Printf("- %s (Parent: %s)\n", name, parentName)
+		fmt.Println("  Includes:")
+		for region := range dist.Includes {
+			fmt.Printf("    - %s\n", region)
+		}
+		fmt.Println("  Excludes:")
+		for region := range dist.Excludes {
+			fmt.Printf("    - %s\n", region)
+		}
+		fmt.Println()
+	}
+}
+
 func main() {
 	// Command line flags
 	csvFile := flag.String("csv", "cities.csv", "Path to the locations CSV file")
-	command := flag.String("cmd", "", "Command to execute (add-distributor, add-permission, check)")
+	dataFile := flag.String("data", "distributors.json", "Path to the distributors data file")
+	command := flag.String("cmd", "", "Command to execute (add-distributor, add-permission, check, list)")
 	distributorName := flag.String("distributor", "", "Distributor name")
 	parentName := flag.String("parent", "", "Parent distributor name (for add-distributor)")
 	region := flag.String("region", "", "Region code")
@@ -245,18 +343,28 @@ func main() {
 		return
 	}
 
+	// Load existing distributor data
+	err = system.LoadState(*dataFile)
+	if err != nil {
+		fmt.Printf("Error loading distributor data: %v\n", err)
+		return
+	}
+
+	var cmdErr error
 	switch *command {
+	case "list":
+		system.ListDistributors()
+		return
+
 	case "add-distributor":
 		if *distributorName == "" {
 			fmt.Println("Error: distributor name is required")
 			return
 		}
-		err := system.AddDistributor(*distributorName, *parentName)
-		if err != nil {
-			fmt.Printf("Error adding distributor: %v\n", err)
-			return
+		cmdErr = system.AddDistributor(*distributorName, *parentName)
+		if cmdErr == nil {
+			fmt.Printf("Successfully added distributor: %s\n", *distributorName)
 		}
-		fmt.Printf("Successfully added distributor: %s\n", *distributorName)
 
 	case "add-permission":
 		if *distributorName == "" || *region == "" {
@@ -264,13 +372,11 @@ func main() {
 			return
 		}
 		isInclude := *permissionType == "include"
-		err := system.AddPermission(*distributorName, *region, isInclude)
-		if err != nil {
-			fmt.Printf("Error adding permission: %v\n", err)
-			return
+		cmdErr = system.AddPermission(*distributorName, *region, isInclude)
+		if cmdErr == nil {
+			fmt.Printf("Successfully added %s permission for %s to %s\n",
+				*permissionType, *region, *distributorName)
 		}
-		fmt.Printf("Successfully added %s permission for %s to %s\n",
-			*permissionType, *region, *distributorName)
 
 	case "check":
 		if *distributorName == "" || *region == "" {
@@ -293,8 +399,22 @@ func main() {
 		fmt.Println("1. Add distributor:")
 		fmt.Println("   go run main.go -cmd=add-distributor -distributor=DIST1 [-parent=PARENTDIST]")
 		fmt.Println("\n2. Add permission:")
-		fmt.Println("   go run main.go -cmd=add-permission -distributor=DIST1 -region=REGION-CODE(City Code-Province Code-Country Code) -type=include/exclude")
+		fmt.Println("   go run main.go -cmd=add-permission -distributor=DIST1 -region=REGION-CODE -type=include/exclude")
 		fmt.Println("\n3. Check permission:")
-		fmt.Println("   go run main.go -cmd=check -distributor=DIST1 -region=REGION-CODE(City Code-Province Code-Country Code)")
+		fmt.Println("   go run main.go -cmd=check -distributor=DIST1 -region=REGION-CODE")
+		fmt.Println("\n4. List all distributors:")
+		fmt.Println("   go run main.go -cmd=list")
+	}
+
+	if cmdErr != nil {
+		fmt.Printf("Error: %v\n", cmdErr)
+		return
+	}
+
+	// Save state after successful command execution
+	if *command != "check" && *command != "list" {
+		if err := system.SaveState(*dataFile); err != nil {
+			fmt.Printf("Error saving state: %v\n", err)
+		}
 	}
 }

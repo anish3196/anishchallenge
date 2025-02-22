@@ -1,0 +1,10 @@
+{
+    "DIST1": {
+        "Name": "DIST1",
+        "ParentName": "",
+        "Includes": {
+            "HR-IN": true
+        },
+        "Excludes": {}
+    }
+}
